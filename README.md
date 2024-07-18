@@ -1,3 +1,25 @@
+# TIEGCM 3.0 NG
+
+This version includes the nested grid extension of TIEGCM 3.0.
+
+The code design largely follows the original TIEGCM 3.0 codes with reduced function calls for simplicity.
+The essential differences regarding the design of nested grid are commented in each file.
+Please see the original TIEGCM 3.0 codes without the ng extension for the explanation of physical processes.
+
+The additional input parameters for TIEGCM 3.0 NG are explained as follows:
+1. NESTING: logical, specifying whether nesting functionality is turned on; default is false (off)
+2. NSTEP_NG: integer array, specifying how many sub-cyclings are used in each level
+3. DLEV_NG: real array, specifying the spacing of vertical grids in each level; it is suggested to have the same vertical grid across all nesting levels
+4. GLAT0_NG,GLAT1_NG,GLON0_NG,GLON1_NG: real array, specifying the top, bottom, left, right edges in each level; require top\<bottom, left\<right
+5. DLAT_NG,DLON_NG: real array, specifying the horizontal grid size in each level
+6. FILEOUT_NG: string array, specifying the output filename in each level
+7. VAROUT_NG: string array, specifying the output fields in each level; defaults are TN,O2,O1,Z,ZG (mandatory output fields)
+8. NUDGE_LEVEL: logical array, specifying which level (or global) to be nudged; the length is the number of nesting levels + 1; defaults are false
+
+In case of erroneous settings, the program will check whether conflict input specifications exist and issue error message on exit.
+
+The running procedure is the same as the original TIEGCM 3.0.
+
 # TIEGCM v3.0
 
 Documentation: [TIEGCM ReadtheDocs](https://tiegcm-docs.readthedocs.io/en/latest/) 
