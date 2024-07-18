@@ -7,7 +7,7 @@
 !
       use params_module,only: mxhvols,mxseries,mxseries_sech,mxfsech,
      |  nlat,nlon,nlev,glat1,dlat,glon1,dlon,tgcm_version,tgcm_name,
-     |  spval,ispval,nlonp4,mxind_time,nmlat,nmlonp1
+     |  spval,ispval,nlonp4,mxind_time,nmlat,nmlonp1,mx_ng
       use mk_hvols,only: mkhvols
       implicit none
 !
@@ -168,10 +168,16 @@
      |  mxhist_sech,          ! max number of histories per secondary file
      |  sech_nbyte            ! 4 or 8: write real or double values to secondary file
 !
-      character(len=mxlen_filename) :: nudge_ncpre,nudge_ncpost
-      character(len=mxlen_filename),dimension(mxhvols) :: nudge_ncfile
+      logical :: nesting
+      integer,dimension(mx_ng) :: nstep_ng
+      real,dimension(mx_ng) ::
+     |  dlev_ng,glat0_ng,glat1_ng,dlat_ng,glon0_ng,glon1_ng,dlon_ng
+      character(len=mxlen_filename),dimension(mx_ng) :: fileout_ng
+      character(len=16),dimension(mxfsech) :: varout_ng
+      character(len=mxlen_filename) :: nudge_ncfile
       character(len=16),dimension(mxfsech) :: nudge_flds
       logical,dimension(mxfsech) :: nudge_lbc,nudge_f4d
+      logical,dimension(0:mx_ng) :: nudge_level
       logical :: nudge_use_refdate
       integer,dimension(2) :: nudge_refdate
       real,dimension(2) :: nudge_sponge,nudge_delta,nudge_power
@@ -195,8 +201,10 @@
      |  bgrddata_ncfile,ctmt_ncfile,opdiffcap,electron_heating,
      |  amienh,amiesh,amie_ibkg,he_coefs_ncfile,et,saps,
      |  subaur_data,doEclipse,eclipse_list,oneway,mixfile,
-     |  nudge_ncpre,nudge_ncfile,nudge_ncpost,nudge_flds,
-     |  nudge_lbc,nudge_f4d,nudge_use_refdate,nudge_refdate,
+     |  nesting,nstep_ng,dlev_ng,glat0_ng,glat1_ng,dlat_ng,
+     |  glon0_ng,glon1_ng,dlon_ng,fileout_ng,varout_ng,
+     |  nudge_ncfile,nudge_flds,nudge_lbc,nudge_f4d,nudge_level,
+     |  nudge_use_refdate,nudge_refdate,
      |  nudge_sponge,nudge_delta,nudge_power,nudge_alpha
 !
 ! List of fields that are always written to secondary histories:
@@ -355,12 +363,23 @@
       if (dlat == 2.5) mxhist_sech = 10 ! 2.5 degree horizontal resolution 
       sech_nbyte    = ispval
 
-      nudge_ncpre = ' '
+      nesting = .false.
+      nstep_ng = ispval
+      dlev_ng = spval
+      glat0_ng = spval
+      glat1_ng = spval
+      dlat_ng = spval
+      glon0_ng = spval
+      glon1_ng = spval
+      dlon_ng = spval
+      fileout_ng = ''
+      varout_ng = ''
+
       nudge_ncfile = ' '
-      nudge_ncpost = ' '
       nudge_flds = ' '
       nudge_lbc = .false.
       nudge_f4d = .false.
+      nudge_level = .false.
       nudge_use_refdate = .false.
       nudge_refdate = ispval
       nudge_sponge = spval
@@ -660,10 +679,7 @@
       call expand_path(eclipse_list)
 !
 ! nudging data files:
-      do i = 1,mxhvols
-        if (len_trim(nudge_ncfile(i)) > 0)
-     |    call expand_path(nudge_ncfile(i))
-      enddo
+      if (len_trim(nudge_ncfile) > 0) call expand_path(nudge_ncfile)
 !
 ! 1/12/05 btf: removed old dynamo (was in dynamo_old.F)
 ! 6/11/08 btf: remove dynamo==0 option
@@ -2267,8 +2283,12 @@
 !
 ! Validate lower boundary options:
 !
+      use params_module,only: n_ng
+      use char_module,only: ismember
       implicit none
-      integer :: igswm, isaber, itidi, ihough, ictmt
+      integer :: igswm, isaber, itidi, ihough, ictmt, i_ng, if4d, n
+      character(len=*),dimension(*),parameter :: mandatory =
+     |  (/'TN','O2','O1','Z ','ZG'/)
 !
       igswm = 0
       if (len_trim(gswm_mi_di_ncfile ) > 0.or.
@@ -2331,33 +2351,84 @@
         call shutdown('CTMT_NCFILE not allowed at 5-deg resolution')
       endif
 !
+! check for the compliance of nesting parameters
+      if (nesting) then
+        n_ng = count(nstep_ng/=ispval)
+        if (n_ng > mx_ng)
+     |    call shutdown('nesting level exceeds upper limit')
+        if (count(dlev_ng/=spval)/=n_ng .or.
+     |    count(glat0_ng/=spval)/=n_ng .or.
+     |    count(glat1_ng/=spval)/=n_ng .or.
+     |    count(dlat_ng/=spval)/=n_ng .or.
+     |    count(glon0_ng/=spval)/=n_ng .or.
+     |    count(glon1_ng/=spval)/=n_ng .or.
+     |    count(dlon_ng/=spval)/=n_ng .or.
+     |    count(len_trim(fileout_ng)>0)/=n_ng)
+     |    call shutdown('NSTEP_NG,DLEV_NG,GLAT0_NG,GLAT1_NG,'//
+     |    'DLAT_NG,GLON0_NG,GLON1_NG,DLON_NG,FILEOUT_NG'//
+     |    ' must have the same number of entries')
+        do i_ng = 1,n_ng-1
+          if (glon0_ng(i_ng)>=glon0_ng(i_ng+1) .or.
+     |      glat0_ng(i_ng)>=glat0_ng(i_ng+1))
+     |      call shutdown('GLON0_NG,GLAT0_NG'//
+     |      ' must be strictly increasing')
+          if (glon1_ng(i_ng)<=glon1_ng(i_ng+1) .or.
+     |      glat1_ng(i_ng)<=glat1_ng(i_ng+1))
+     |      call shutdown('GLON1_NG,GLAT1_NG'//
+     |      ' must be strictly decreasing')
+        enddo
+        n = count(len_trim(varout_ng)>0)
+        do if4d = 1,size(mandatory)
+          if (.not. ismember(mandatory(if4d),varout_ng)) then
+            n = n+1
+            varout_ng(n) = trim(mandatory(if4d))
+          endif
+        enddo
+
 ! check for the compliance of nudging parameters
-      if (count(len_trim(nudge_ncfile)>0) > 0) then
-        if (nudge_refdate(1) == ispval) nudge_refdate(1) = start_year
-        if (nudge_refdate(2) == ispval) nudge_refdate(2) = start_day
-        if (any(nudge_sponge < 0))
-     |    call shutdown('NUDGE_SPONGE must be non-negative')
-        where (nudge_sponge == spval) nudge_sponge = 0
-        if (any(nudge_delta <= 0))
-     |    call shutdown('NUDGE_DELTA must be positive')
-        where (nudge_delta == spval) nudge_delta = 1
-        if (any(nudge_power <= 0))
-     |    call shutdown('NUDGE_POWER must be positive')
-        where (nudge_power == spval) nudge_power = 1
-        if (nudge_alpha < 0)
-     |    call shutdown('NUDGE_ALPHA must be non-negative')
-        if (nudge_alpha == spval) nudge_alpha = 0
+        if (len_trim(nudge_ncfile) > 0) then
+          if (nudge_refdate(1) == ispval) nudge_refdate(1) = start_year
+          if (nudge_refdate(2) == ispval) nudge_refdate(2) = start_day
+          if (any(nudge_sponge < 0))
+     |      call shutdown('NUDGE_SPONGE must be non-negative')
+          where (nudge_sponge == spval) nudge_sponge = 0
+          if (any(nudge_delta <= 0))
+     |      call shutdown('NUDGE_DELTA must be positive')
+          where (nudge_delta == spval) nudge_delta = 1
+          if (any(nudge_power <= 0))
+     |      call shutdown('NUDGE_POWER must be positive')
+          where (nudge_power == spval) nudge_power = 1
+          if (nudge_alpha < 0)
+     |      call shutdown('NUDGE_ALPHA must be non-negative')
+          if (nudge_alpha == spval) nudge_alpha = 0
+        else
+          if (any(len_trim(nudge_flds)>0) .or. any(nudge_level) .or.
+     |      any(nudge_lbc) .or. any(nudge_f4d) .or.
+     |      nudge_use_refdate .or. any(nudge_refdate/=ispval) .or.
+     |      any(nudge_sponge/=spval) .or. any(nudge_delta/=spval) .or.
+     |      any(nudge_power/=spval) .or. nudge_alpha/=spval)
+     |      call shutdown('NUDGE_NCFILE must be set if any of '//
+     |      'NUDGE_NCPRE,NUDGE_NCPOST,NUDGE_FLDS,NUDGE_LBC,NUDGE_F4D,'//
+     |      'NUDGE_LEVEL,NUDGE_USE_REFDATE,NUDGE_REFDATE,NUDGE_SPONGE'//
+     |      'NUDGE_DELTA,NUDGE_POWER,NUDGE_ALPHA is set')
+        endif
       else
-        if (len_trim(nudge_ncpre)>0 .or. len_trim(nudge_ncpost)>0 .or.
+        if (any(nstep_ng/=ispval) .or. any(glat0_ng/=spval) .or.
+     |    any(glat1_ng/=spval) .or. any(dlat_ng/=spval) .or.
+     |    any(glon0_ng/=spval) .or. any(dlon_ng/=spval) .or.
+     |    any(len_trim(fileout_ng)>0) .or.
+     |    any(len_trim(varout_ng)>0) .or.
+     |    len_trim(nudge_ncfile)>0 .or.
      |    any(len_trim(nudge_flds)>0) .or.
      |    any(nudge_lbc) .or. any(nudge_f4d) .or.
+     |    any(nudge_level) .or.
      |    nudge_use_refdate .or. any(nudge_refdate/=ispval) .or.
      |    any(nudge_sponge/=spval) .or. any(nudge_delta/=spval) .or.
      |    any(nudge_power/=spval) .or. nudge_alpha/=spval)
-     |    call shutdown('NUDGE_NCFILE must set if any of '//
-     |    'NUDGE_NCPRE,NUDGE_NCPOST,NUDGE_FLDS,NUDGE_LBC,NUDGE_F4D,'//
-     |    'NUDGE_USE_REFDATE,NUDGE_REFDATE,NUDGE_SPONGE,NUDGE_DELTA,'//
-     |    'NUDGE_POWER,NUDGE_ALPHA is set')
+     |    call shutdown('NESTING must be true if any of '//
+     |    'NSTEP_NG,DLEV_NG,GLAT0_NG,GLAT1_NG,DLAT_NG,'//
+     |    'GLON0_NG,GLON1_NG,DLON_NG,FILEOUT_NG,VAROUT_NG,'//
+     |    ' or any other nudging related parameters are set')
       endif
 
       end subroutine inp_lbc

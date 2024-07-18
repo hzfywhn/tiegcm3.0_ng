@@ -16,7 +16,7 @@
      |  expzmid_inv,difk,dtx2inv,dtsmooth,dtsmooth_div2,difhor,
      |  gask,grav,re,p0
       use chemrates_module,only: fs ! from sub comp_o2o
-      use lbc,only: b,fb,pshelb
+      use lbc,only: b,fb,pshelb,flx_he
       use fields_module,only: tlbc
       use addfld_module,only: addfld
       use input_module,only: calc_helium
@@ -51,7 +51,7 @@
       integer,parameter :: io2=1,io1=2,ihe=3 ! indices to O2, O, He respectively
       real,dimension(lon0:lon1,lev0:lev1,3,3) :: gama
       real,dimension(lon0:lon1,lev0:lev1,3)   :: zz
-      real,dimension(lon0:lon1,lat0:lat1)     :: flx_he,flx_arg  ! Helium Mass Flux at upper boundary
+      real,dimension(lon0:lon1,lat0:lat1)     :: flx_arg  ! Helium Mass Flux at upper boundary
       real,dimension(lon0:lon1,lev0:lev1)     :: embar
       real,dimension(lon0:lon1,3,3,2)         :: ak
       real,dimension(lon0:lon1,3,3)           :: ep,pk,qk,rk,wkm1

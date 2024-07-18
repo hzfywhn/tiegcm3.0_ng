@@ -23,7 +23,8 @@
       use input_module,only: pristart,step,idynamo=>dynamo,
      |  calendar_advance,gpi_ncfile,potential_model,wei05sc_ncfile,
      |  imf_ncfile,current_pg,current_kq,iamie,amie_ibkg,
-     |  start_day,nudge_lbc,nudge_f4d,nudge_alpha,
+     |  start_day,nesting,dlev_ng,dlat_ng,dlon_ng,glat0_ng,glat1_ng,
+     |  glon0_ng,glon1_ng,nudge_level,nudge_lbc,nudge_f4d,nudge_alpha,
      |  doEclipse,eclipse_list
       use input_module,only: 
      |  power  ,power_time  ,ntimes_power, rd_power,
@@ -50,21 +51,27 @@
       use gpi_module,only: rdgpi,getgpi
       use imf_module,only: getimf
       use gswm_module,only: getgswm
-      use params_module,only: nlonp4,nlat,
-     |  nlon,nlonp2,dlon,glon,glon0
+      use params_module,only: nlonp4,nlat,nlon,nlonp2,dlon,glon,
+     |  glon0,zmbot,zibot,zitop,n_ng,nlon_ng,nlat_ng,
+     |  nlevp1_ng,glon_ng,glat_ng,zpmid_ng,zpint_ng
       use amie_module,only: getamie,tiepot
       use output,only: outhist,output_hist
       use addfld_module,only: addfld
       use lbc,only: tuvz_lbc,t_lbc,u_lbc,v_lbc,z_lbc
       use eclipse_module,only: read_eclipse_list,find_eclipse
-      use nudge_module,only:
+      use fields_ng_module,only:
+     |  modeltime_ng=>modeltime,init_ng,alloc_fields
+      use level_outer_ng_module,only: init_mapping_1=>init_mapping
+      use levels_inner_ng_module,only: init_mapping
+      use sync_ng_module,only: init_sync
+      use output_ng_module,only: init_output_ng=>init,
+     |  output_ng=>output,finalize_output_ng=>finalize
+      use nudge_ng_module,only:
      |  nudge_check=>check,nudge_init=>init,
      |  nudge_update=>update,nudge_finalize=>finalize,
      |  nudge_nlb=>nlb,nudge_nf4d=>nf4d,
      |  nudge_time=>time,nudge_itime=>itime,
-     |  ext_lbc=>lbc,ext_f4d=>f4d,lbc_flag,
-     |  f4d_idx,wrap,maxlev,latbeg,latend,lonbeg,lonend,
-     |  offbeg,offend,lonbeg1,lonend1,hori_weight,vert_weight
+     |  nudge_fields=>flds,lbc_flag,f4d_idx,wrap
 !
 ! Routines and timing for parallel dynamo (pdynamo.F):
       use pdynamo_module,only: dynamo_inputs,pdynamo,pefield,
@@ -90,7 +97,9 @@
 #endif
 !
 ! Local:
-      integer :: i,j,itmp,ier,iprint,month,day,modelsec,ifld,k
+      integer :: i,j,itmp,ier,iprint,month,day,modelsec,ifld,i_ng,
+     |  maxlev,k,latbeg,latend,lonbeg,lonend,offbeg,offend,
+     |  lonbeg1,lonend1
       integer :: cmodeltime(4) !MAGE coupling time
       real :: fmin,fmax,delta,fac1,fac2
       integer(kind=8) :: nsecs ! current model time in seconds,
@@ -117,9 +126,10 @@
       integer :: lev0=1,lev1=nlevp1
 !
 ! External:
-      logical,external :: wrhist,time2print
+      logical,external :: wrhist,time2print,isclose
       real,external :: hp_from_bz_swvel,hp_from_kp,ctpoten_from_kp
       integer,external :: mtime_to_secs
+      external :: set_const_fields_ng,init_fields_ng,advance_ng
 !
 #ifdef VT
 !     code = 115 ; state = 'advance' ; activity='ModelCode'
@@ -187,13 +197,76 @@
       glon0(3:nlonp2) = glon
       glon0(1:2) = glon(1)-(/2,1/)*dlon
       glon0(nlonp2+1:nlonp4) = glon(nlon)+(/1,2/)*dlon
+!
+      if (nesting) then
+        nlevp1_ng = 0
+        nlon_ng = 0
+        nlat_ng = 0
 
-! this nudge_lbc is from nudge module, not from input module
+        delta = zitop-zibot
+        do i_ng = 1,n_ng
+          nlevp1_ng(i_ng) = delta/dlev_ng(i_ng)
+          if (.not. isclose(dlev_ng(i_ng)*nlevp1_ng(i_ng),delta))
+     |      call shutdown('invalid DLEV_NG '//
+     |      '(must be an exact division of ZITOP-ZIBOT)')
+          nlevp1_ng(i_ng) = nlevp1_ng(i_ng)+1
+          nlon_ng(i_ng) =
+     |      (glon1_ng(i_ng)-glon0_ng(i_ng))/dlon_ng(i_ng)+1
+          nlat_ng(i_ng) =
+     |      (glat1_ng(i_ng)-glat0_ng(i_ng))/dlat_ng(i_ng)+1
+        enddo
+
+        allocate(zpmid_ng(n_ng,maxval(nlevp1_ng)))
+        allocate(zpint_ng(n_ng,maxval(nlevp1_ng)))
+        allocate(glon_ng(n_ng,-1:maxval(nlon_ng)+2))
+        allocate(glat_ng(n_ng,-1:maxval(nlat_ng)+2))
+        zpmid_ng = spval
+        zpint_ng = spval
+        glon_ng = spval
+        glat_ng = spval
+        do i_ng = 1,n_ng
+          do k = 1,nlevp1_ng(i_ng)
+            zpmid_ng(i_ng,k) = zmbot+(k-1)*dlev_ng(i_ng)
+            zpint_ng(i_ng,k) = zibot+(k-1)*dlev_ng(i_ng)
+          enddo
+          do i = -1,nlon_ng(i_ng)+2
+            glon_ng(i_ng,i) = glon0_ng(i_ng)+(i-1)*dlon_ng(i_ng)
+          enddo
+          do j = -1,nlat_ng(i_ng)+2
+            glat_ng(i_ng,j) = glat0_ng(i_ng)+(j-1)*dlat_ng(i_ng)
+          enddo
+        enddo
+! glon_ng(i_ng,nlon_ng(i_ng)+2),glat_ng(i_ng,nlat_ng(i_ng)+2)
+! might not be equal to glon1_ng(i_ng),glat1_ng(i_ng)
+! do not use glon1_ng,glat1_ng for any calculation/condition later
+
+        call init_ng
+        call alloc_fields
+        call init_output_ng
+        call init_mapping_1
+        call init_mapping
+        call init_sync
+        call set_const_fields_ng
+! initialization is not complete since ng fields haven't been filled
+      endif
+
+! nudge module should be initialized after ng module
+! since ng locations are used in nudge module
       if (any(nudge_lbc) .or. any(nudge_f4d)) then
         if (mytid == 0) call nudge_check
         call nudge_init
 
-        if (latbeg < latend) then
+        maxlev = nudge_fields(0)%maxlev
+        latbeg = nudge_fields(0)%latbeg
+        latend = nudge_fields(0)%latend
+        lonbeg = nudge_fields(0)%lonbeg
+        lonend = nudge_fields(0)%lonend
+        offbeg = nudge_fields(0)%offbeg
+        offend = nudge_fields(0)%offend
+        lonbeg1 = nudge_fields(0)%lonbeg1
+        lonend1 = nudge_fields(0)%lonend1
+
+        if (nudge_level(0) .and. latbeg<latend) then
           allocate(wt(lon0:lon1,latbeg:latend))
           allocate(ext_fld(lon0:lon1,latbeg:latend))
           allocate(tmp_lbc(lon0:lon1,latbeg:latend))
@@ -327,7 +400,7 @@
 ! read external fields and interpolate spatially
 ! this sets up both ext_lbc and ext_f4d
       if (any(nudge_lbc) .or. any(nudge_f4d)) then
-        if (latbeg<latend .and. nudge_time(nudge_itime+1)<modelsec)
+        if (nudge_time(nudge_itime+1) < modelsec)
      |    call nudge_update(modelsec)
         delta = nudge_time(nudge_itime+1)-nudge_time(nudge_itime)
         fac1 = (nudge_time(nudge_itime+1)-modelsec)/delta
@@ -336,13 +409,14 @@
 
 ! lower boundary based on nudge data
       if (any(nudge_lbc)) then
-        if (latbeg<latend .and.
+        if (nudge_level(0) .and. latbeg<latend .and.
      |    nudge_time(nudge_itime)<=modelsec .and.
      |    modelsec<=nudge_time(nudge_itime+1)) then
 
 ! temporal interpolation
-          nclbc = fac1*ext_lbc(:,:,1,:)+fac2*ext_lbc(:,:,2,:)
-          wt = nudge_alpha*hori_weight
+          nclbc = fac1*nudge_fields(0)%lbc(:,:,1,:)+
+     |      fac2*nudge_fields(0)%lbc(:,:,2,:)
+          wt = nudge_alpha*nudge_fields(0)%hori_weight
 
           do ifld = 1,nudge_nlb
             if (lbc_flag(ifld)) then
@@ -688,12 +762,27 @@
      |      idynamo
       endif ! idynamo
 !
+      if (nesting) then
+! fill ng fields with global fields, this finishes initialization
+        if (istep == 1) then
+          call init_fields_ng
+          modeltime_ng = modelsec-step
+        endif
+        call advance_ng(1)
+
+! in case lon=1,2 or lon=nlonp4-1,nlonp4 are not correctly replaced
+        call mp_periodic_f4d(itc)
+
+        if (time2write) call output_ng
+      endif
+!
       if (any(nudge_f4d)) then
-        if (latbeg<latend .and.
+        if (nudge_level(0) .and. latbeg<latend .and.
      |    nudge_time(nudge_itime)<=modelsec .and.
      |    modelsec<=nudge_time(nudge_itime+1)) then
 
-          ncf4d = fac1*ext_f4d(:,:,:,1,:)+fac2*ext_f4d(:,:,:,2,:)
+          ncf4d = fac1*nudge_fields(0)%f4d(:,:,:,1,:)+
+     |      fac2*nudge_fields(0)%f4d(:,:,:,2,:)
 
           do ifld = 1,nudge_nf4d
             if (nudge_f4d(ifld)) then
@@ -701,7 +790,8 @@
      |          data(1:maxlev,lon0:lon1,latbeg:latend,itc)
 
               do k = 1,maxlev
-                wt = nudge_alpha*hori_weight*vert_weight(k,ifld)
+                wt = nudge_alpha*nudge_fields(0)%hori_weight*
+     |            nudge_fields(0)%vert_weight(k,ifld)
                 ext_fld = wt*ncf4d(k,:,:,ifld)+(1-wt)*tmp_f4d(k,:,:)
 
                 if (wrap) then
@@ -820,9 +910,8 @@
         goto 100
       endif
 !
-      if (any(nudge_lbc) .or. any(nudge_f4d)) then
-        if (latbeg < latend) call nudge_finalize
-      endif
+      if (nesting) call finalize_output_ng
+      if (any(nudge_lbc) .or. any(nudge_f4d)) call nudge_finalize
 !
 #ifdef VT
 !     code = 115 ; state = 'advance' ; activity='ModelCode'

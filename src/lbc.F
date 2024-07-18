@@ -17,7 +17,8 @@
 ! Total lower boundary conditions returned by this module.
 ! (dimensioned at full global grid, but defined at subdomains only)
 !
-      real,dimension(:,:),allocatable :: t_lbc, u_lbc, v_lbc, z_lbc
+      real,dimension(:,:),allocatable :: t_lbc, u_lbc, v_lbc, z_lbc,
+     |  flx_he ! Helium Mass Flux at upper boundary
 !
 ! Diurnal and semi-diurnal tidal perturbations using Hough functions: 
 !
@@ -48,6 +49,7 @@
       allocate(u_lbc(lon0:lon1,lat0:lat1))
       allocate(v_lbc(lon0:lon1,lat0:lat1))
       allocate(z_lbc(lon0:lon1,lat0:lat1))
+      allocate(flx_he(lon0:lon1,lat0:lat1))
 !
 ! t0 in cons is zeroed out:
       t0cons(:) = 0.
